@@ -51,7 +51,7 @@ from getpass import getpass
 
 class Axel(Thread):
 
-    def __init__(self, url, output='./', connections=3, axel=None):
+    def __init__(self, url, output='./', connections=3, axel=None, multi=None):
         Thread.__init__(self)
         self.url = url
         self.axel = axel or 'axel'
@@ -59,6 +59,7 @@ class Axel(Thread):
         self.process = None
         self.finished = False
         self.output = output or './'
+        self.multi = multi
 
         self.completed = 0
         self.speed = 0
@@ -70,6 +71,19 @@ class Axel(Thread):
         output_dir = os.path.dirname(self.output)
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
+
+        
+        # See if file exists and needs to be resumed. The .st file is the axel state file used for resuming.
+        if os.path.exists(self.output):
+            if os.path.exists(self.output + '.st'):
+                # State file exists, so Axel will resume it
+                self.multi.write_status("Resuming: %s" % self.output)
+            else:
+                # TODO File exists, but has no state file. Check if sizes matches complete file
+                self.multi.write_status("Skipping existing file that has no state file: %s" % self.output)
+                self.finished = True
+                return
+            
 
         cmd = "%s -n %d -o %s %s" % (self.axel, self.connections, self.output, self.url)
         #print "Calling: ", cmd
@@ -109,7 +123,7 @@ class MultiAxel(object):
     def __init__(self, address, user=None, password=None, output=None, axel=None, connections=3, num_files=3):
         o = urlparse(address)
 
-        dest_dir = os.path.basename(o.path.strip('/'))
+        dest_dir = os.path.basename(o.path.rstrip('/'))
 
         self.dir_list_cache = {}
 
@@ -161,7 +175,7 @@ class MultiAxel(object):
     def remove_finished_threads(self):
         for t in self.threads:
             if t.finished:
-                self.write_status("Finished: %s" % t.url)
+                self.write_status("Finished: %s" % urlparse(t.url).path)
                 self.threads.remove(t)
 
     def write_status(self, msg):
@@ -213,37 +227,65 @@ class MultiAxel(object):
         return "%s://%s:%s@%s:%d%s" % (self.scheme, self.user, self.password, self.host, self.port, path)
 
     def download_file(self, path):
-            
-        output_path = path[len(self.base_path):].strip('/')
+        path = path.rstrip('/')
+
+        output_path = path[len(self.base_path):].rstrip('/')
         output = os.path.join(self.output, output_path)
 
         self.write_status("Downloading file: %s => %s" % (path, output))
 
-        thread = Axel(self.url_for_path(path), output=output, connections=self.connections)
+        thread = Axel(self.url_for_path(path), output=output, connections=self.connections, multi=self)
         self.threads.append(thread)
         thread.start()
 
     def download_directory(self, path):
+        path = path.rstrip('/')
         self.write_status("Downloading directory: %s" % path)
-        files = [os.path.join(path, f) for f in self.list_directory(path)]
+        files = [os.path.join(path, f) for f in self.list_directory(path).keys()]
         # Add contents to top of queue
         self.add_to_queue(files, 0)
         
     def list_directory(self, path, force=False):
         self.login()
 
-        # Pull from cached list of directory contents if possible
+        # Populate cache of file list if it doesn't exist
         if not force and path not in self.dir_list_cache:
-            self.dir_list_cache[path] = self.ftp.nlst(path)
+            self.dir_list_cache[path.rstrip('/')] = dict([(f.rstrip('/'), None) for f in self.ftp.nlst(path)]) # Cache is {filename: filesize}
 
         return self.dir_list_cache[path]
+
+    def file_size(self, path, force=False):
+        """Returns the size of a file, or -1 for a Directory"""
+        path = path.rstrip('/')
+        #self.write_status("Getting size of: %s" % path)
+
+        dirname = os.path.dirname(path).rstrip('/')
+        basename = os.path.basename(path).rstrip('/')
+
+        # If we already have the size cached then use that
+        if not force:
+            files = self.list_directory(dirname)
+            if files[basename]:
+                return files[basename]
+
+        # Couldn't get size from cache, so have to query the server
+        try:
+            fsize = self.ftp.size(path)
+        except: # Probably a directory
+            fsize = -1
+
+        # Cache result for later 
+        if self.dir_list_cache[dirname]:
+            self.dir_list_cache[dirname][basename] = fsize
+
+        return fsize
+
 
     def is_directory(self, path):
         return (not self.is_file(path))
 
     def is_file(self, path):
-        files = self.list_directory(path)
-        return (len(files) == 1 and files[0] == path)
+        return self.file_size(path) > -1
 
 
 def main():
