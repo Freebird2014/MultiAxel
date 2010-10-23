@@ -155,7 +155,7 @@ class MultiAxel(object):
 
         self.remove_finished_threads()
 
-        if not self.queue:
+        if not self.queue and not self.threads:
             self.finished = True
 
     def remove_finished_threads(self):
