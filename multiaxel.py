@@ -229,7 +229,7 @@ class MultiAxel(object):
     def download_file(self, path):
         path = path.rstrip('/')
 
-        output_path = path[len(self.base_path):].rstrip('/')
+        output_path = path[len(self.base_path)+1:].rstrip('/')
         output = os.path.join(self.output, output_path)
 
         self.write_status("Downloading file: %s => %s" % (path, output))
