@@ -181,6 +181,18 @@ class MultiAxel(object):
     def write_status(self, msg):
         print msg
 
+    def reconnect(self):
+        self.write_status("Attempting to reconnect")
+        self.logged_in = False
+        try:
+            self.ftp.quit()
+        except:
+            pass
+
+        self.ftp = FTP()
+        self.login()
+
+
     def login(self):
         if self.logged_in:
             return
@@ -245,12 +257,20 @@ class MultiAxel(object):
         # Add contents to top of queue
         self.add_to_queue(files, 0)
         
-    def list_directory(self, path, force=False):
+    def list_directory(self, path, force=False, no_reconnect=False):
         self.login()
 
         # Populate cache of file list if it doesn't exist
         if not force and path not in self.dir_list_cache:
-            self.dir_list_cache[path.rstrip('/')] = dict([(f.rstrip('/'), None) for f in self.ftp.nlst(path)]) # Cache is {filename: filesize}
+            try:
+                self.dir_list_cache[path.rstrip('/')] = dict([(f.rstrip('/'), None) for f in self.ftp.nlst(path)]) # Cache is {filename: filesize}
+            except EOFError:
+                if not no_reconnect:
+                    # Usually caused by the FTP server disconnecting before we get here
+                    self.reconnect()
+                    self.list_directory(path, force, no_reconnect=True)
+                else:
+                    raise EOFError
 
         return self.dir_list_cache[path]
 
